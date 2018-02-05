@@ -1,0 +1,7 @@
+{
+  "name": "gdax-trader",
+  "version": "0.01",
+  "dependencies": {
+    "gdax": "^0.5.1"
+  }
+}
