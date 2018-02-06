@@ -3,11 +3,12 @@ My gdax experiments creating a bot that can perform triangular arbitrage, hoping
 
 To run:
 
-(1) create your own private licenses.js and add your gdax api codes like this:
+(1) create your own private licenses.js and add your gdax api codes and site URLs like this:
 exports.passphrase = "pass"
 exports.secret = "garbageAF093N8PVAIW4O8FNU3Q3RTQJ9823PF"
 exports.key = "GARBAGEadsjfklasdf"
 exports.URL = "https://api.gdax.com"
+exports.ws_feed = "wss://ws-feed.gdax.com"
 
 put this file in the same folder as trader.js
 
