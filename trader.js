@@ -9,66 +9,10 @@ const authedClient = new Gdax.AuthenticatedClient(
 );
 
 
-const supportedExchangesObject = {
-    "BTC-USD": {
-        baseCoin: "BTC",
-        quoteCoin: "USD",
-        quoteMinIncrement: 0.01 
-    },
-    "BCH-BTC": {
-        baseCoin: "BCH",
-        quoteCoin: "BTC",
-        quoteMinIncrement: 0.00001 
-    },
-    "BCH-USD": {
-        baseCoin: "BCH",
-        quoteCoin: "USD",
-        quoteMinIncrement: 0.01 
-    },
-    "ETH-BTC": {
-        baseCoin: "ETH",
-        quoteCoin: "BTC",
-        quoteMinIncrement: 0.00001 
-    },
-    "ETH-USD": {
-        baseCoin: "ETH",
-        quoteCoin: "USD",
-        quoteMinIncrement: 0.01 
-    },
-    "LTC-BTC": {
-        baseCoin: "LTC",
-        quoteCoin: "BTC",
-        quoteMinIncrement: 0.00001 
-    },
-    "LTC-USD": {
-        baseCoin: "LTC",
-        quoteCoin: "USD",
-        quoteMinIncrement: 0.01 
-    },
-    numberOfExchanges: 7,
-    counter: 0,
-    checkIfComplete: function () {
-        //Call this after updating every exchange
-        this.counter++;
-        if(this.counter >= this.numberOfExchanges)
-            return true;
-        return false;
-    }
-}
-
-const supportedExchanges = ['BTC-USD', 'BCH-BTC', 'BCH-USD', 'ETH-BTC', 'ETH-USD', 'LTC-BTC', 'LTC-USD'];
-// const exchangeBidAsks = [[],[],[],[],[],[],[]];
-// var dataComplete = false;
-
-var baseCoin = "USD";
-var cash = 18.5;
-var maxVal = -1;
-var maxCoin;
-var pathResults = [];
-
 //****************************************************************************************************
 authedClient.getAccounts(
     (error, response, book) => {
+        var maxVal = -1, maxCoin;
         // console.log("ACCOUNTS -> ", book);
         for (var i = 0; i < book.length; i++) {
             // console.log(book[i].currency);
@@ -78,32 +22,20 @@ authedClient.getAccounts(
                 maxCoin = book[i].currency;
             }
         }
-        // console.log("maxVal is ", maxVal);
-        // console.log("maxCoin is ", maxCoin);
+        var pathCalculator = new GDAXPathCalculator(maxCoin, maxVal);
         authedClient.getProducts(
             (error, response, book) => {
                 // console.log("GETTING PRODUCTS");
                 // console.log(book);
-                for (i = 0; i < supportedExchanges.length; i++) {
+                for (i = 0; i < pathCalculator.supportedExchanges.length; i++) {
                     authedClient.getProductOrderBook(
-                        supportedExchanges[i],
+                        pathCalculator.supportedExchanges[i],
                         (error, response, book) => {
-                            var exchange = getExchangeFromResponse(response, supportedExchanges);
-                            var index = supportedExchanges.indexOf(exchange);
-                            // console.log(book);
-                            // console.log("IN LOOP -> ", exchange);
-                            // console.log("ask -> ", book.asks[0]);
-                            // console.log("bid -> ", book.bids[0]);
-                            var bid = book.bids[0][0];
-                            var ask = book.asks[0][0];
-                            // console.log("BID -> ", book.bids[0][0]);
-                            // console.log("ASK -> ", book.asks[0][0]);
-                            supportedExchangesObject[exchange].bid = bid;
-                            supportedExchangesObject[exchange].ask = ask;
-                            // exchangeBidAsks[index] = [bid, ask];
-                            calculatePaths();
-                            // if(index == supportedExchanges.length - 1)
-                                dataComplete = true;                            
+                            var exchange = getExchangeFromResponse(response, pathCalculator.supportedExchanges);
+                            console.log("ProductOrderBook -> ", book);
+                            pathCalculator.supportedExchangesObject.insertBidAndAsk(exchange, book.bids[0][0], book.asks[0][0]);
+                            if(pathCalculator.supportedExchangesObject.checkIfComplete())
+                                pathCalculator.calculatePaths();
                         }                        
                     );
                 }    
@@ -113,15 +45,178 @@ authedClient.getAccounts(
 );
 
 
-function GDAXPathCalculator() {
-    baseCoin: "USD",
-    cash: 18.5,
-    maxVal: -1,
-    maxCoin: "",
-    pathResults: [],    
-    supportedExchanges: ['BTC-USD', 'BCH-BTC', 'BCH-USD', 'ETH-BTC', 'ETH-USD', 'LTC-BTC', 'LTC-USD'],
-    supportedExchangesObject: 
+function GDAXPathCalculator(maxCoin, maxVal) {
+    this.baseCoin = "USD";
+    this.cash = 0; 
+    this.accountCoin = maxCoin;
+    this.accountValue = maxVal;
+    this.pathResults = [];    
+    this.calculatePaths = function () {
+        if(this.supportedExchangesObject.checkIfComplete())
+        {
+            // console.log(this.supportedExchanges);
+            // console.log(exchangeBidAsks);
+
+            //Level 1
+            var baseExchanges = [];
+            var secondarySymbols = [];
+            for (var i = 0; i < this.supportedExchanges.length; i++) {
+                if(this.supportedExchanges[i].includes(this.baseCoin))
+                {
+                    baseExchanges.push(this.supportedExchanges[i]);
+                    var nonUSCoin = getFirstCoinOfExchange(this.supportedExchanges[i]);
+                    if(nonUSCoin == "USD")
+                        nonUSCoin = getSecondCoinOfExchange(this.supportedExchanges[i]);
+                    // console.log(nonUSCoin);
+                    secondarySymbols.push(nonUSCoin);
+                }
+            }
+            //Level 2
+            var secondaryExchanges = [];
+            for (var i = 0; i < secondarySymbols.length; i++) {
+                var secondarySubGroup = [];
+                for (var j = 0; j < this.supportedExchanges.length; j++) {
+                    if(this.supportedExchanges[j].includes(secondarySymbols[i]))
+                    {
+                        if(!(this.supportedExchanges[j].includes("USD")))
+                        {
+                            secondarySubGroup.push(this.supportedExchanges[j]);
+                        }
+                    }
+                }
+                secondaryExchanges.push(secondarySubGroup);
+            }
+            // for (var i = 0; i < secondaryExchanges.length; i++) {
+            //     console.log("i = ", i);
+            //     for (var j = 0; j < secondaryExchanges[i].length; j++) {
+            //         console.log(secondaryExchanges[i][j]);
+            //     }
+            // }   
+            //BEFORE WE MOVE ON, MAKE SURE I HAVE USD AND NOT SOMETHING ELSE
+            if(this.accountCoin != this.baseCoin) {
+                var x;
+                for (var i = 0; i < baseExchanges.length; i++) {
+                    console.log(baseExchanges[i]);
+                    if(baseExchanges[i].includes(this.accountCoin))
+                        x = baseExchanges[i];
+                }
+                var returnArray = this.exchangeCurrency(this.accountCoin, this.accountValue, x);
+                // this.baseCoin = returnArray[0];
+                console.log(returnArray);
+                this.cash = returnArray[1];            
+                console.log("PRE EXCHANGE, this.cash = ", this.cash);
+            } else {
+                this.cash = this.accountValue;
+            }
+            //FIND KEYSTONE CONNECTORS
+            var keystoneConnectors = [];
+            for (var i = 0; i < secondaryExchanges.length; i++) {
+                for (var j = i + 1; j < secondaryExchanges.length; j++) {
+                    var firstArray = secondaryExchanges[i];
+                    var secondArray = secondaryExchanges[j];
+                    for (var k = 0; k < firstArray.length; k++) {
+                        if(secondArray.includes(firstArray[k]))
+                        {
+                            keystoneConnectors.push(firstArray[k]);
+                        }
+                    }                
+                }
+            }         
+            //CONSTRUCT PATH USING KEYSTONES
+            //paths will be an array of exchanges
+            //so validPaths will be an array of arrays
+            validPaths = [];
+            for (var i = 0; i < keystoneConnectors.length; i++) {
+                //path1 and 2 are just reverse of each other
+                var path1 = [];
+                var path2 = [];
+                path1.push(keystoneConnectors[i]);
+                path2.push(keystoneConnectors[i]);
+                var coin1 = getFirstCoinOfExchange(keystoneConnectors[i]);
+                var coin2 = getSecondCoinOfExchange(keystoneConnectors[i]);
+                var exchange1, exchange2;
+                for (var j = 0; j < baseExchanges.length; j++) {
+                    if(baseExchanges[j].includes(coin1))
+                        exchange1 = baseExchanges[j];
+                    if(baseExchanges[j].includes(coin2))
+                        exchange2 = baseExchanges[j];                
+                }
+                path1.unshift(exchange1);
+                path1.push(exchange2);
+
+                path2.unshift(exchange2);
+                path2.push(exchange1);
+
+                validPaths.push(path1);
+                validPaths.push(path2);
+            }
+            // for (var i = 0; i < validPaths.length; i++) {
+            //     // console.log("**************PATH ", i);
+            //     for (var j = 0; j < validPaths[i].length; j++) {
+            //         console.log(validPaths[i][j]);
+            //     }
+            // }
+            // CALCULATE THE PRICE EXCHANGE
+            var runningValue = this.cash;  
+            var runningCurrency = this.baseCoin;  
+            for (var i = 0; i < validPaths.length; i++) {
+                // console.log("**************PATH ", i);
+                for (var j = 0; j < validPaths[i].length; j++) {
+                    // console.log("*");
+                    // console.log("coin, value, exchange: ", runningCurrency, runningValue, validPaths[i][j]);
+                    var returnArray = this.exchangeCurrency(runningCurrency, runningValue, validPaths[i][j]);
+                    runningCurrency = returnArray[0];
+                    runningValue = returnArray[1];
+                    // [runningCurrency, runningValue]
+                }
+                this.pathResults.push(runningValue);
+                runningValue = this.cash;
+                runningCurrency = this.baseCoin;
+            }    
+            // PRINT YOUR RESULTS    
+            for (var i = 0; i < this.pathResults.length; i++) {
+                console.log("**********");
+                console.log("path -> ", validPaths[i]);
+                console.log("path result ", i, " is ", this.pathResults[i]);
+                console.log("difference is ", this.pathResults[i] - this.cash);
+            }
+
+        }
+    };
+    this.exchangeCurrency = function(currency, value, exchange)
     {
+        var coin1 = getFirstCoinOfExchange(exchange);
+        var coin2 = getSecondCoinOfExchange(exchange);
+        // var bidAsksIndex = this.supportedExchanges.indexOf(exchange);
+        // var bidAsks = exchangeBidAsks[bidAsksIndex];
+        var bid = this.supportedExchangesObject[exchange].bid;
+        var ask = this.supportedExchangesObject[exchange].ask;
+        if(currency == coin2)
+        {
+            //quote coin == currency
+            var newValue = value;
+            if(this.supportedExchangesObject[exchange].quoteCoin == currency)
+                newValue = floorPrecision(newValue, this.supportedExchangesObject[exchange].quoteMinIncrement);
+            var rate = bid;
+            console.log(exchange, ": buying ", value / rate, " ", coin1, " with ", value, " ", currency, " at a rate of " , rate, ". (Ask rate is ", ask, ").");        
+            console.log("... lost dust = ", value - newValue);        
+            return [coin1, value / rate];
+        } else //currency == coin1
+        {
+            var rate = ask;
+            var otherValue = value * rate;
+            var truncatedOtherValue;
+            if(this.supportedExchangesObject[exchange].quoteCoin == coin2)
+                truncatedOtherValue = floorPrecision(otherValue, this.supportedExchangesObject[exchange].quoteMinIncrement);
+            //Adjust value now
+            value = truncatedOtherValue / rate;
+            console.log(exchange, ": selling ",  value, " ", currency, " for ", truncatedOtherValue, " ", coin2, " at a rate of ", rate, ". (buy rate is ", bid, ")."); 
+            console.log("... lost dust = ", otherValue - truncatedOtherValue);
+            return [coin2, truncatedOtherValue];        
+        }
+    };
+    this.supportedExchanges = ['BTC-USD', 'BCH-BTC', 'BCH-USD', 'ETH-BTC', 'ETH-USD', 'LTC-BTC', 'LTC-USD'];
+    this.supportedExchangesObject = {
         "BTC-USD": {
             baseCoin: "BTC",
             quoteCoin: "USD",
@@ -159,6 +254,10 @@ function GDAXPathCalculator() {
         },
         numberOfExchanges: 7,
         counter: 0,
+        insertBidAndAsk: function (exchange, bid, ask) {
+            this[exchange].bid = bid;
+            this[exchange].ask = ask;
+        },
         checkIfComplete: function () {
             //Call this after updating every exchange
             this.counter++;
@@ -166,173 +265,7 @@ function GDAXPathCalculator() {
                 return true;
             return false;
         }
-    },
-
-}
-
-function calculatePaths()
-{
-    if(supportedExchangesObject.checkIfComplete())
-    {
-        // console.log(supportedExchanges);
-        // console.log(exchangeBidAsks);
-
-        //Level 1
-        var baseExchanges = [];
-        var secondarySymbols = [];
-        for (var i = 0; i < supportedExchanges.length; i++) {
-            if(supportedExchanges[i].includes(baseCoin))
-            {
-                baseExchanges.push(supportedExchanges[i]);
-                var nonUSCoin = getFirstCoinOfExchange(supportedExchanges[i]);
-                if(nonUSCoin == "USD")
-                    nonUSCoin = getSecondCoinOfExchange(supportedExchanges[i]);
-                // console.log(nonUSCoin);
-                secondarySymbols.push(nonUSCoin);
-            }
-        }
-        //Level 2
-        var secondaryExchanges = [];
-        for (var i = 0; i < secondarySymbols.length; i++) {
-            var secondarySubGroup = [];
-            for (var j = 0; j < supportedExchanges.length; j++) {
-                if(supportedExchanges[j].includes(secondarySymbols[i]))
-                {
-                    if(!(supportedExchanges[j].includes("USD")))
-                    {
-                        secondarySubGroup.push(supportedExchanges[j]);
-                    }
-                }
-            }
-            secondaryExchanges.push(secondarySubGroup);
-        }
-        // for (var i = 0; i < secondaryExchanges.length; i++) {
-        //     console.log("i = ", i);
-        //     for (var j = 0; j < secondaryExchanges[i].length; j++) {
-        //         console.log(secondaryExchanges[i][j]);
-        //     }
-        // }   
-        //BEFORE WE MOVE ON, MAKE SURE I HAVE USD AND NOT SOMETHING ELSE
-        if(maxCoin != baseCoin) {
-            var x;
-            for (var i = 0; i < baseExchanges.length; i++) {
-                console.log(baseExchanges[i]);
-                if(baseExchanges[i].includes(maxCoin))
-                    x = baseExchanges[i];
-            }
-            var returnArray = exchangeCurrency(maxCoin, maxVal, x);
-            // baseCoin = returnArray[0];
-            // console.log(returnArray);
-            cash = returnArray[1];            
-            // console.log("PRE EXCHANGE, cash = ", cash);
-        }
-        //FIND KEYSTONE CONNECTORS
-        var keystoneConnectors = [];
-        for (var i = 0; i < secondaryExchanges.length; i++) {
-            for (var j = i + 1; j < secondaryExchanges.length; j++) {
-                var firstArray = secondaryExchanges[i];
-                var secondArray = secondaryExchanges[j];
-                for (var k = 0; k < firstArray.length; k++) {
-                    if(secondArray.includes(firstArray[k]))
-                    {
-                        keystoneConnectors.push(firstArray[k]);
-                    }
-                }                
-            }
-        }         
-        //CONSTRUCT PATH USING KEYSTONES
-        //paths will be an array of exchanges
-        //so validPaths will be an array of arrays
-        validPaths = [];
-        for (var i = 0; i < keystoneConnectors.length; i++) {
-            //path1 and 2 are just reverse of each other
-            var path1 = [];
-            var path2 = [];
-            path1.push(keystoneConnectors[i]);
-            path2.push(keystoneConnectors[i]);
-            var coin1 = getFirstCoinOfExchange(keystoneConnectors[i]);
-            var coin2 = getSecondCoinOfExchange(keystoneConnectors[i]);
-            var exchange1, exchange2;
-            for (var j = 0; j < baseExchanges.length; j++) {
-                if(baseExchanges[j].includes(coin1))
-                    exchange1 = baseExchanges[j];
-                if(baseExchanges[j].includes(coin2))
-                    exchange2 = baseExchanges[j];                
-            }
-            path1.unshift(exchange1);
-            path1.push(exchange2);
-
-            path2.unshift(exchange2);
-            path2.push(exchange1);
-
-            validPaths.push(path1);
-            validPaths.push(path2);
-        }
-        // for (var i = 0; i < validPaths.length; i++) {
-        //     // console.log("**************PATH ", i);
-        //     for (var j = 0; j < validPaths[i].length; j++) {
-        //         console.log(validPaths[i][j]);
-        //     }
-        // }
-        // CALCULATE THE PRICE EXCHANGE
-        var runningValue = cash;  
-        var runningCurrency = baseCoin;  
-        for (var i = 0; i < validPaths.length; i++) {
-            // console.log("**************PATH ", i);
-            for (var j = 0; j < validPaths[i].length; j++) {
-                // console.log("*");
-                // console.log("coin, value, exchange: ", runningCurrency, runningValue, validPaths[i][j]);
-                var returnArray = exchangeCurrency(runningCurrency, runningValue, validPaths[i][j]);
-                runningCurrency = returnArray[0];
-                runningValue = returnArray[1];
-                // [runningCurrency, runningValue]
-            }
-            pathResults.push(runningValue);
-            runningValue = cash;
-            runningCurrency = baseCoin;
-        }    
-        // PRINT YOUR RESULTS    
-        for (var i = 0; i < pathResults.length; i++) {
-            console.log("**********");
-            console.log("path -> ", validPaths[i]);
-            console.log("path result ", i, " is ", pathResults[i]);
-            console.log("difference is ", pathResults[i] - cash);
-        }
-
-    }
-}
-
-function exchangeCurrency(currency, value, exchange)
-{
-    var coin1 = getFirstCoinOfExchange(exchange);
-    var coin2 = getSecondCoinOfExchange(exchange);
-    // var bidAsksIndex = supportedExchanges.indexOf(exchange);
-    // var bidAsks = exchangeBidAsks[bidAsksIndex];
-    var bid = supportedExchangesObject[exchange].bid;
-    var ask = supportedExchangesObject[exchange].ask;
-    if(currency == coin2)
-    {
-        //quote coin == currency
-        var newValue = value;
-        if(supportedExchangesObject[exchange].quoteCoin == currency)
-            newValue = floorPrecision(newValue, supportedExchangesObject[exchange].quoteMinIncrement);
-        var rate = bid;
-        console.log(exchange, ": buying ", value / rate, " ", coin1, " with ", value, " ", currency, " at a rate of " , rate, ". (Ask rate is ", ask, ").");        
-        console.log("... lost dust = ", value - newValue);        
-        return [coin1, value / rate];
-    } else //currency == coin1
-    {
-        var rate = ask;
-        var otherValue = value * rate;
-        var truncatedOtherValue;
-        if(supportedExchangesObject[exchange].quoteCoin == coin2)
-            truncatedOtherValue = floorPrecision(otherValue, supportedExchangesObject[exchange].quoteMinIncrement);
-        //Adjust value now
-        value = truncatedOtherValue / rate;
-        console.log(exchange, ": selling ",  value, " ", currency, " for ", truncatedOtherValue, " ", coin2, " at a rate of ", rate, ". (buy rate is ", bid, ")."); 
-        console.log("... lost dust = ", otherValue - truncatedOtherValue);
-        return [coin2, truncatedOtherValue];        
-    }
+    };
 }
 
 function floorPrecision(value, precision)
