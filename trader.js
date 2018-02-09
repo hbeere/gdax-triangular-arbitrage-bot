@@ -8,41 +8,214 @@ const authedClient = new Gdax.AuthenticatedClient(
   licenses.URL
 );
 
+//***********************************
+//Define supported exchanges object and the arbitrager object
+supportedExchanges = new SupportedExchanges(['BTC-USD', 'BCH-BTC', 'BCH-USD', 'ETH-BTC', 'ETH-USD', 'LTC-BTC', 'LTC-USD']);
 
+arbitrager = new GDAXTriangularArbitrager(authedClient);
 //****************************************************************************************************
-authedClient.getAccounts(
+// Creating this object is asynchronous, since it pulls account data
+// Shouldn't be a problem, though, because enough time passes when another call to
+// getProducts() happens.
+
+authedClient.getProducts(
     (error, response, book) => {
-        var maxVal = -1, maxCoin;
-        // console.log("ACCOUNTS -> ", book);
-        for (var i = 0; i < book.length; i++) {
-            // console.log(book[i].currency);
-            if(maxVal < book[i].available)
+        // console.log("GETTING PRODUCTS");
+        // console.log(book);
+        for (i = 0; i < supportedExchanges.exchanges.length; i++) {
+            authedClient.getProductOrderBook(
+                supportedExchanges.exchanges[i],
+                (error, response, book) => {
+                    var exchange = getExchangeFromResponse(response, supportedExchanges.exchanges);
+                    console.log("ProductOrderBook -> ", book);
+                    supportedExchanges.insertBidAndAsk(exchange, book.bids[0][0], book.asks[0][0]);
+                    if(supportedExchanges.checkIfComplete())
+                        arbitrager.calculatePaths();
+                }                        
+            );
+        }    
+    }
+); 
+
+
+function GDAXTriangularArbitrager(gdaxAuthedClient) {
+    this.gdaxAuthedClient = gdaxAuthedClient;
+    this.gdaxAuthedClient.getAccounts(
+        (error, response, book) => {
+            var maxVal = -1, maxCoin;
+            // console.log("ACCOUNTS -> ", book);
+            for (var i = 0; i < book.length; i++) {
+                // console.log(book[i].currency);
+                if(maxVal < book[i].available)
+                {
+                    maxVal = book[i].available;
+                    maxCoin = book[i].currency;
+                }
+            }
+            this.accountCoin = maxCoin;
+            this.accountValue = maxVal;
+        }
+    );    
+    this.pathsToUSD = []; //Array of subarrays that are sequences of exchange names that lead to USD
+    this.calculatePaths = function () {
+        this.pathFinder = new PathFinder();
+    };
+}
+
+
+
+
+
+function PathFinder(startCoin, endCoin) {
+    this.startCoin = startCoin;
+    this.endCoin = endCoin;
+    this.findPaths = function (arrayOfPathArrays, currentCoin, endCoin, recurseLevel) {
+        for (var h = 0; h < arrayOfPathArrays.length; h++) {
+            var currentPath = arrayOfPathArrays[h];
+            var lastIndex = currentPath.length - 1;
+            var currentExchange = currentPath[lastIndex];
+            if(currentExchange.isArray())
             {
-                maxVal = book[i].available;
-                maxCoin = book[i].currency;
+                var tempArrayOfPaths = [];
+                currentPath.pop();
+                for (var i = 0; i < currentExchange.length; i++) {
+                     currentExchange[i]
+                }
+            }
+            var x = supportedExchanges.getExchangeFromName(currentExchange);
+            var otherCoin = x.baseCoin == currentCoin ? x.quoteCoin : x.baseCoin;
+            if((recurseLevel == 0 && currentCoin == endCoin) || //currentCoin will never be endCoin, except recurseLevel==0
+                (otherCoin != endCoin))
+            {
+                var forks = supportedExchanges.getExchangesWithCoini(otherCoin);
+                for (var j = 0; j < currentPath.length; j++) {
+                    var index = forks.indexOf(currentPath[j]);
+                    if(index != -1) //duplicate exchange found, don't allow backtracking
+                        forks.splice(index, 1);
+                }
+                currentPath.push(forks);
+                arrayOfPathArrays[h] = currentPath; // update the original array of arrays
+                this.findPaths(arrayOfPathArrays, otherCoin, endCoin, recurseLevel + 1);
+            } else if(otherCoin == "USD")
+            {
+                // We're done, do nothing
             }
         }
-        var pathCalculator = new GDAXPathCalculator(maxCoin, maxVal);
-        authedClient.getProducts(
-            (error, response, book) => {
-                // console.log("GETTING PRODUCTS");
-                // console.log(book);
-                for (i = 0; i < pathCalculator.supportedExchanges.length; i++) {
-                    authedClient.getProductOrderBook(
-                        pathCalculator.supportedExchanges[i],
-                        (error, response, book) => {
-                            var exchange = getExchangeFromResponse(response, pathCalculator.supportedExchanges);
-                            console.log("ProductOrderBook -> ", book);
-                            pathCalculator.supportedExchangesObject.insertBidAndAsk(exchange, book.bids[0][0], book.asks[0][0]);
-                            if(pathCalculator.supportedExchangesObject.checkIfComplete())
-                                pathCalculator.calculatePaths();
-                        }                        
-                    );
-                }    
-            }
-        );            
     }
-);
+    var connectingExchanges = supportedExchanges.getExchangObjectsWithCoin(this.startCoin);
+    this.paths = this.findPaths(connectingExchanges, this.startCoin, this.endCoin);
+}
+
+function PathMarker(thisIndex, parentObject) {
+    this.index = thisIndex;
+    if(parentObject)
+        this.parent = parentObject;
+    else
+        this.parent = new PathMarker(-1); //Original has no parent. And no bellybutton.
+}
+
+function Exchange(name) {
+    this.name = name;
+    this.baseCoin = getFirstCoinOfExchange(name);
+    this.quoteCoin = getSecondCoinOfExchange(name);    
+    switch(quoteCoin) {
+    case "BTC":
+        this.quoteMinIncrement = 0.00001;
+        break;
+    case "USD":
+    default:
+        this.quoteMinIncrement = 0.01;    
+        break;
+    }
+    // This stuff is to facilitate caching their position inside of a tangle of paths
+    this.pathMarker = new PathMarker(0); // I guess all Exchanges are "original" by default 
+}
+
+function SupportedExchanges(supportedExchangesArray) {
+    this.exchanges = [];
+    this.exchangesUpdated = [];
+    for (var i = 0; i < supportedExchangesArray.length; i++) {
+        var ex = new Exchange(supportedExchangesArray[i]);
+        this.exchanges.push(ex);
+    };
+    this.insertBidAndAsk = function (exchange, bid, ask) {
+        for (var i = 0; i < this.exchanges.length; i++) {
+            if (this.exchanges[i].name == exchange) 
+            {
+                this.exchanges[i].bid = bid;
+                this.exchanges[i].ask = ask;
+            }
+        }
+        this.exchangesUpdated.push(i);
+    },
+    this.checkIfComplete = function () {
+        if(this.exchangesUpdated.length == this.exchanges.length)
+            return true;
+        return false;
+    },    
+    this.getExchangObjectsWithCoin = function(coin) {
+        var returnArray = [];
+        for (var i = 0; i < this.exchanges.length; i++) {
+            if(this.exchanges[i].name.includes(coin))
+                returnArray.push(this.exchanges[i]);           
+        }
+        return returnArray;
+    }
+    this.getExchangeFromName = function(name) {
+        for (var i = 0; i < this.exchanges.length; i++) {
+            if(this.exchanges[i].name == name)
+                return this.exchanges[i];
+        }
+    }
+}
+
+
+// Original path calculator
+// The method is flawed, but works like this:
+// It assumes you own USD, and it calculates all paths away and back to USD through the exchanges.
+// It then determines the USD value change over each path.
+//
+// The flaw is this: each trade will take time, and volitile markets can invalidate paths
+// before all trades are complete.
+//
+// Solution: The trader should calculate all paths from current position to USD,
+// (and not assume one is holding USD). Once the first step is taken on the highest
+// yielding path, all paths should be reconsidered to account for changing markets.
+//****************************************************************************************************
+// authedClient.getAccounts(
+//     (error, response, book) => {
+//         var maxVal = -1, maxCoin;
+//         // console.log("ACCOUNTS -> ", book);
+//         for (var i = 0; i < book.length; i++) {
+//             // console.log(book[i].currency);
+//             if(maxVal < book[i].available)
+//             {
+//                 maxVal = book[i].available;
+//                 maxCoin = book[i].currency;
+//             }
+//         }
+//         var pathCalculator = new GDAXPathCalculator(maxCoin, maxVal);
+//         authedClient.getProducts(
+//             (error, response, book) => {
+//                 // console.log("GETTING PRODUCTS");
+//                 // console.log(book);
+//                 for (i = 0; i < pathCalculator.supportedExchanges.length; i++) {
+//                     authedClient.getProductOrderBook(
+//                         pathCalculator.supportedExchanges[i],
+//                         (error, response, book) => {
+//                             var exchange = getExchangeFromResponse(response, pathCalculator.supportedExchanges);
+//                             console.log("ProductOrderBook -> ", book);
+//                             pathCalculator.supportedExchangesObject.insertBidAndAsk(exchange, book.bids[0][0], book.asks[0][0]);
+//                             if(pathCalculator.supportedExchangesObject.checkIfComplete())
+//                                 pathCalculator.calculatePaths();
+//                         }                        
+//                     );
+//                 }    
+//             }
+//         );            
+//     }
+// );
+
 
 
 function GDAXPathCalculator(maxCoin, maxVal) {
@@ -268,6 +441,9 @@ function GDAXPathCalculator(maxCoin, maxVal) {
     };
 }
 
+
+
+//Helper Functions
 function floorPrecision(value, precision)
 {
     return Math.floor(value / precision) * precision;
