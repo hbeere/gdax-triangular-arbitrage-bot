@@ -20,28 +20,28 @@ arbitrager = new GDAXTriangularArbitrager(authedClient);
 // Shouldn't be a problem, though, because enough time passes when another call to
 // getProducts() happens.
 
-// authedClient.getProducts(
-//     (error, response, book) => {
-//         // console.log("GETTING PRODUCTS");
-//         // console.log(book);
-//         for (i = 0; i < supportedExchanges.exchanges.length; i++) {
-//             authedClient.getProductOrderBook(
-//                 supportedExchanges.exchanges[i],
-//                 (error, response, book) => {
-//                     var exchange = getExchangeFromResponse(response, supportedExchanges.exchanges);
-//                     console.log("ProductOrderBook -> ", book);
-//                     supportedExchanges.insertBidAndAsk(exchange, book.bids[0][0], book.asks[0][0]);
-//                     if(supportedExchanges.checkIfComplete())
-//                         arbitrager.calculatePaths();
-//                 }                        
-//             );
-//         }    
-//     }
-// ); 
-
-
 function GDAXTriangularArbitrager(gdaxAuthedClient) {
     this.gdaxAuthedClient = gdaxAuthedClient;
+    this.pullDataFromGDAX = function () {
+        this.gdaxAuthedClient.getProducts(
+            (error, response, book) => {
+                // console.log("GETTING PRODUCTS");
+                // console.log(book);
+                for (i = 0; i < supportedExchanges.exchanges.length; i++) {
+                    this.gdaxAuthedClient.getProductOrderBook(
+                        supportedExchanges.exchanges[i].name,
+                        (error, response, book) => {
+                            var exchange = getExchangeFromResponse(response, supportedExchanges.exchanges);
+                            console.log("ProductOrderBook -> ", book);
+                            supportedExchanges.insertBidAndAsk(exchange, book.bids[0][0], book.asks[0][0]);
+                            if(supportedExchanges.checkIfComplete())
+                                console.log("ready to roll ... when you are!");
+                        }                        
+                    );
+                }    
+            }
+        ); 
+    }
     this.gdaxAuthedClient.getAccounts(
         (error, response, book) => {
             var maxVal = -1, maxCoin;
@@ -57,7 +57,8 @@ function GDAXTriangularArbitrager(gdaxAuthedClient) {
             this.accountCoin = maxCoin;
             this.accountValue = maxVal;
             this.pathFinder = new PathFinder(this.accountCoin, "USD");
-            this.pathFinder.printFullPaths();            
+            this.pathFinder.printFullPaths();    
+            this.pullDataFromGDAX();        
         }
     );    
 }
