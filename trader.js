@@ -13,29 +13,31 @@ const authedClient = new Gdax.AuthenticatedClient(
 supportedExchanges = new SupportedExchanges(['BTC-USD', 'BCH-BTC', 'BCH-USD', 'ETH-BTC', 'ETH-USD', 'LTC-BTC', 'LTC-USD']);
 
 arbitrager = new GDAXTriangularArbitrager(authedClient);
+
+
 //****************************************************************************************************
 // Creating this object is asynchronous, since it pulls account data
 // Shouldn't be a problem, though, because enough time passes when another call to
 // getProducts() happens.
 
-authedClient.getProducts(
-    (error, response, book) => {
-        // console.log("GETTING PRODUCTS");
-        // console.log(book);
-        for (i = 0; i < supportedExchanges.exchanges.length; i++) {
-            authedClient.getProductOrderBook(
-                supportedExchanges.exchanges[i],
-                (error, response, book) => {
-                    var exchange = getExchangeFromResponse(response, supportedExchanges.exchanges);
-                    console.log("ProductOrderBook -> ", book);
-                    supportedExchanges.insertBidAndAsk(exchange, book.bids[0][0], book.asks[0][0]);
-                    if(supportedExchanges.checkIfComplete())
-                        arbitrager.calculatePaths();
-                }                        
-            );
-        }    
-    }
-); 
+// authedClient.getProducts(
+//     (error, response, book) => {
+//         // console.log("GETTING PRODUCTS");
+//         // console.log(book);
+//         for (i = 0; i < supportedExchanges.exchanges.length; i++) {
+//             authedClient.getProductOrderBook(
+//                 supportedExchanges.exchanges[i],
+//                 (error, response, book) => {
+//                     var exchange = getExchangeFromResponse(response, supportedExchanges.exchanges);
+//                     console.log("ProductOrderBook -> ", book);
+//                     supportedExchanges.insertBidAndAsk(exchange, book.bids[0][0], book.asks[0][0]);
+//                     if(supportedExchanges.checkIfComplete())
+//                         arbitrager.calculatePaths();
+//                 }                        
+//             );
+//         }    
+//     }
+// ); 
 
 
 function GDAXTriangularArbitrager(gdaxAuthedClient) {
@@ -54,71 +56,125 @@ function GDAXTriangularArbitrager(gdaxAuthedClient) {
             }
             this.accountCoin = maxCoin;
             this.accountValue = maxVal;
+            this.pathFinder = new PathFinder(this.accountCoin, "USD");
+            this.pathFinder.printFullPaths();            
         }
     );    
-    this.pathsToUSD = []; //Array of subarrays that are sequences of exchange names that lead to USD
-    this.calculatePaths = function () {
-        this.pathFinder = new PathFinder();
-    };
 }
-
-
-
-
 
 function PathFinder(startCoin, endCoin) {
     this.startCoin = startCoin;
     this.endCoin = endCoin;
-    this.findPaths = function (arrayOfPathArrays, currentCoin, endCoin, recurseLevel) {
-        for (var h = 0; h < arrayOfPathArrays.length; h++) {
-            var currentPath = arrayOfPathArrays[h];
-            var lastIndex = currentPath.length - 1;
-            var currentExchange = currentPath[lastIndex];
-            if(currentExchange.isArray())
+    this.pathLevels = [];
+    this.completedPaths = [];
+    this.doIt = function () {
+        this.initializePathLevels();
+        this.constructPathLevels();
+        this.calculateFullPaths();
+    }    
+    this.initializePathLevels = function () {
+        this.pathLevels = [];
+        this.pathLevels.push(supportedExchanges.getExchangeObjectsWithCoin(startCoin));
+    }
+    this.constructPathLevels = function () {
+        //Get the most recent level (an array of exchanges at that step in the path)
+        var lastIndex = this.pathLevels.length - 1;
+        var currentLevel = this.pathLevels[lastIndex];
+        //Iterate through all of the exchanges, set parent and child exchanges
+        var allNextLevelXs = [];
+        for (var i = 0; i < currentLevel.length; i++) {
+            var x = currentLevel[i];
+            var currentCoin = x.tracePathForCurrentCoin(this.startCoin);
+            //I have the current coin. Get the "paired" coin on the exchange
+            // console.log("currentCoin = ", currentCoin);
+            // console.log("x = ", x);
+            var pairedCoin = x.getPairedCoin(currentCoin, x);
+            // console.log("Paired coin = ", pairedCoin);
+            // console.log("end coin = ", endCoin);
+            // console.log("current coin = ", currentCoin);
+            if(pairedCoin != endCoin)
             {
-                var tempArrayOfPaths = [];
-                currentPath.pop();
-                for (var i = 0; i < currentExchange.length; i++) {
-                     currentExchange[i]
+                //Find all potential child exchanges
+                var potentialNextLevelXs = supportedExchanges.getExchangeObjectsWithCoin(pairedCoin);
+                var validatedNextLevelXs = [];
+                //Loop deletes any Xs that immediately backtrack
+                for (var j = 0; j < potentialNextLevelXs.length; j++) {
+                    var thisChild = potentialNextLevelXs[j]; 
+                    if(x.name != thisChild.name)
+                    {
+                        // console.log("thisChild = ", thisChild.name);
+                        thisChild.setParent(x); //This is how I track the paths among the nested arrays
+                        validatedNextLevelXs.push(thisChild);
+                    }
                 }
+                allNextLevelXs = allNextLevelXs.concat(validatedNextLevelXs);                
             }
-            var x = supportedExchanges.getExchangeFromName(currentExchange);
-            var otherCoin = x.baseCoin == currentCoin ? x.quoteCoin : x.baseCoin;
-            if((recurseLevel == 0 && currentCoin == endCoin) || //currentCoin will never be endCoin, except recurseLevel==0
-                (otherCoin != endCoin))
-            {
-                var forks = supportedExchanges.getExchangesWithCoini(otherCoin);
-                for (var j = 0; j < currentPath.length; j++) {
-                    var index = forks.indexOf(currentPath[j]);
-                    if(index != -1) //duplicate exchange found, don't allow backtracking
-                        forks.splice(index, 1);
+        }
+        if(allNextLevelXs.length > 0)
+        {
+            // console.log("allNextLevelXs = ", allNextLevelXs);
+            this.pathLevels.push(allNextLevelXs);
+            this.constructPathLevels();
+        }
+    }
+    this.printPathLevels = function () {
+        for (var h = 0; h < this.pathLevels.length; h++) {
+            console.log("********** Level ", h, " ************");
+            for (var i = 0; i < this.pathLevels[h].length; i++) {
+                var x = this.pathLevels[h][i];
+                var parent = x.link.parent.name;
+                var children = [];
+                for (var j = 0; j < x.link.children.length; j++) {
+                    children.push(x.link.children[j].name);
                 }
-                currentPath.push(forks);
-                arrayOfPathArrays[h] = currentPath; // update the original array of arrays
-                this.findPaths(arrayOfPathArrays, otherCoin, endCoin, recurseLevel + 1);
-            } else if(otherCoin == "USD")
-            {
-                // We're done, do nothing
+                console.log(parent, "<==== ", this.pathLevels[h][i].name, " =====> ", children);
             }
         }
     }
-    var connectingExchanges = supportedExchanges.getExchangObjectsWithCoin(this.startCoin);
-    this.paths = this.findPaths(connectingExchanges, this.startCoin, this.endCoin);
+    this.printFullPaths = function () {
+        for (var f = 0; f < this.completedPaths.length; f++) {
+            var tempPath = [];
+            for (var i = 0; i < this.completedPaths[f].length; i++) {
+                 tempPath.push(this.completedPaths[f][i].name);
+            }
+            console.log(tempPath);
+        }
+    }
+    this.calculateFullPaths = function () {
+        // work backwards, finding all exchanges with no children
+        var noChildrenXs = [];
+        for (var h = this.pathLevels.length - 1; h >= 0; h--) {
+            // console.log(this.pathLevels[h]);
+            for (var j = 0; j < this.pathLevels[h].length; j++) {
+                if(this.pathLevels[h][j].link.children.length == 0)
+                    noChildrenXs.push(this.pathLevels[h][j]);
+            }
+        }
+        for (var i = 0; i < noChildrenXs.length; i++) {
+            var x = noChildrenXs[i];
+            var runningPath = [];
+            while(x)
+            {
+                runningPath.unshift(x);
+                x = x.link.parent;
+            }
+            this.completedPaths.push(runningPath);
+        }
+    }
+    this.doIt();
 }
 
-function PathMarker(thisIndex, parentObject) {
-    this.index = thisIndex;
-    if(parentObject)
-        this.parent = parentObject;
-    else
-        this.parent = new PathMarker(-1); //Original has no parent. And no bellybutton.
+function PathLinks(parentObject) {
+    this.parent = parentObject;
+    this.children = [];
 }
 
-function Exchange(name) {
+function Exchange(name, parentLink = 0) {
     this.name = name;
     this.baseCoin = getFirstCoinOfExchange(name);
     this.quoteCoin = getSecondCoinOfExchange(name);    
-    switch(quoteCoin) {
+    switch(this.quoteCoin) 
+    {
     case "BTC":
         this.quoteMinIncrement = 0.00001;
         break;
@@ -127,8 +183,55 @@ function Exchange(name) {
         this.quoteMinIncrement = 0.01;    
         break;
     }
-    // This stuff is to facilitate caching their position inside of a tangle of paths
-    this.pathMarker = new PathMarker(0); // I guess all Exchanges are "original" by default 
+    // Link data to facilitate create paths later
+    this.link = new PathLinks(parentLink);
+    this.getPairedCoin = function (currentCoin)
+    {
+        if(this.baseCoin == currentCoin)
+            return this.quoteCoin;
+        else if(this.quoteCoin == currentCoin)
+            return this.baseCoin;
+        else
+            return false;
+    }
+    this.tracePathForCurrentCoin = function (startCoin)
+    {
+        // Go all the way to the original parent, caching the path
+        var path = [];
+        path.push(this);
+        var tempMe = this;
+        var tempParent = tempMe.link.parent;
+        while (tempParent) 
+        {
+            tempMe = tempParent;
+            tempParent = tempMe.link.parent;
+            path.unshift(tempMe);
+        }
+        var runningCurrentCoin = startCoin;
+        for (var i = 0; i < path.length - 1; i++) {
+            runningCurrentCoin = path[i].getPairedCoin(runningCurrentCoin);
+        }
+        return runningCurrentCoin;
+    }
+    this.setParent = function (parent)
+    {
+        this.link.parent = parent;
+        parent.setChildAfterCheckingForDupes(this);
+    }
+    this.setChildAfterCheckingForDupes = function(child)
+    {
+        var duplicates = false;
+        for (var i = 0; i < this.link.children.length; i++)
+        {
+            if(this.link.children[i].name == child.name)
+            {
+                duplicates = true;
+                break;
+            }
+        }
+        if(!duplicates)
+            this.link.children.push(child);
+    }    
 }
 
 function SupportedExchanges(supportedExchangesArray) {
@@ -153,11 +256,14 @@ function SupportedExchanges(supportedExchangesArray) {
             return true;
         return false;
     },    
-    this.getExchangObjectsWithCoin = function(coin) {
+    this.getExchangeObjectsWithCoin = function(coin) {
         var returnArray = [];
         for (var i = 0; i < this.exchanges.length; i++) {
             if(this.exchanges[i].name.includes(coin))
-                returnArray.push(this.exchanges[i]);           
+            {
+                var tempX = new Exchange(this.exchanges[i].name, this.exchanges[i].link.parent);
+                returnArray.push(tempX);           
+            }
         }
         return returnArray;
     }
