@@ -23,16 +23,24 @@ arbitrager = new GDAXTriangularArbitrager(authedClient);
 function GDAXTriangularArbitrager(gdaxAuthedClient) {
     this.gdaxAuthedClient = gdaxAuthedClient;
     this.pathResults = [];
+    // All of these objects are declare asynchronously below. Be aware that they exist.
     // this.accountCoin;
     // this.accountValue;
+    // this.accountValueInTermsOfEndCoin;
     // this.pathFinder;   
+
+    //This happens last, after pulling all data from GDAX
+    //It calculates the difference in price if the money is exchanged through the path
     this.calculatePriceExchanges = function () {
-        // CALCULATE THE PRICE EXCHANGE
         var runningValue = this.accountValue;  
         var runningCurrency = this.accountCoin;  
         for (var i = 0; i < this.pathFinder.completedPaths.length; i++) {
             for (var j = 0; j < this.pathFinder.completedPaths[i].length; j++) {
                 var xName = this.pathFinder.completedPaths[i][j].name;
+                // I need to do this because I copy the exchange objects out of the
+                // "supportedExchanges" internal array, and so my exchange objects don't
+                // have the bid/ask data.
+                // Very poor design. Not sure if it's worth solving at this point.
                 var xWithBidAsk = supportedExchanges.getExchangeFromName(xName);
                 var returnArray = xWithBidAsk.exchangeCurrency(runningCurrency, runningValue);
                 runningCurrency = returnArray[0];
@@ -42,7 +50,20 @@ function GDAXTriangularArbitrager(gdaxAuthedClient) {
             this.pathResults.push(runningValue);
             runningValue = this.accountValue;
             runningCurrency = this.accountCoin;
-        }    
+        }  
+
+        //I've calculated the paths in terms of endCoin. 
+        //Now convert what I HAVE already into terms of endCoin.
+        
+
+        this.accountValueInTermsOfEndCoin = this.accountValue;
+        if(this.accountCoin != this.pathFinder.endCoin)
+            this.accountValueInTermsOfEndCoin = supportedExchanges.exchangeCoinForCoin(this.accountValue, this.accountCoin, this.pathFinder.endCoin);
+
+        // console.log(this.accountValue);
+        // console.log(this.accountCoin);
+        // console.log(this.pathFinder.endCoin);
+        // console.log(this.accountValueInTermsOfEndCoin);
         // PRINT YOUR RESULTS    
         for (var i = 0; i < this.pathResults.length; i++) {
             console.log("**********");
@@ -53,9 +74,11 @@ function GDAXTriangularArbitrager(gdaxAuthedClient) {
             }
             console.log("path -> ", pathArray);
             console.log("path result ", i, " is ", this.pathResults[i]);
-            console.log("difference is ", this.pathResults[i] - this.accountValue);
+            console.log("difference is ", this.pathResults[i] - this.accountValueInTermsOfEndCoin);
         }
     }
+
+    //Pull data from GDAX about the exchange rates of all coins
     this.pullCoinDataFromGDAX = function () {
         this.gdaxAuthedClient.getProducts(
             (error, response, book) => {
@@ -63,16 +86,23 @@ function GDAXTriangularArbitrager(gdaxAuthedClient) {
                     this.gdaxAuthedClient.getProductOrderBook(
                         supportedExchanges.exchanges[i].name,
                         (error, response, book) => {
+                            if(error)
+                                console.log("Got an error: ", error);
                             var exchange = getExchangeFromResponse(response, supportedExchanges.exchanges);
                             supportedExchanges.insertBidAndAsk(exchange, book.bids[0][0], book.asks[0][0]);
                             if(supportedExchanges.checkIfComplete())
+                            {
                                 this.calculatePriceExchanges();
+                            }
                         }                        
                     );
                 }    
             }
         ); 
     }
+
+    //This is executed first, and pulls down the data from my user account.
+    //After that, it triggers pullCoinDataFromGDAX(), which calls calculatePriceExchanges();
     this.gdaxAuthedClient.getAccounts(
         (error, response, book) => {
             var maxVal = -1, maxCoin;
@@ -85,7 +115,11 @@ function GDAXTriangularArbitrager(gdaxAuthedClient) {
             }
             this.accountCoin = maxCoin;
             this.accountValue = maxVal;
-            this.pathFinder = new PathFinder(this.accountCoin, "USD");
+            // this.accountCoin = "BTC";
+            // this.accountValue = 0.002;
+            this.endCoin = "USD";
+            // this.accountValueInTermsOfEndCoin can't be set yet. Wait until supportedExchanges is complete
+            this.pathFinder = new PathFinder(this.accountCoin, this.endCoin);
             // this.pathFinder.printFullPaths();    
             this.pullCoinDataFromGDAX();        
         }
@@ -191,12 +225,12 @@ function PathLinks(parentObject) {
     this.children = [];
 }
 
-function Exchange(name, parentLink = 0) {
+function Exchange(name, parentLink = 0, bid = 0, ask = 0) {
     this.name = name;
     this.baseCoin = getFirstCoinOfExchange(name);
     this.quoteCoin = getSecondCoinOfExchange(name);    
-    // this.bid;
-    // this.ask;
+    this.bid = bid;
+    this.ask = ask;
     switch(this.quoteCoin) 
     {
     case "BTC":
@@ -308,11 +342,23 @@ function SupportedExchanges(supportedExchangesArray) {
         for (var i = 0; i < this.exchanges.length; i++) {
             if(this.exchanges[i].name.includes(coin))
             {
-                var tempX = new Exchange(this.exchanges[i].name, this.exchanges[i].link.parent);
+                var thisX = this.exchanges[i];
+                var tempX = new Exchange(thisX.name, thisX.link.parent, thisX.bid, thisX.ask);
                 returnArray.push(tempX);           
             }
         }
         return returnArray;
+    }
+    this.getExchangeObjectWithTwoCoins = function (coin1, coin2) {
+        for (var i = 0; i < this.exchanges.length; i++) {
+            if(this.exchanges[i].name.includes(coin1) && this.exchanges[i].name.includes(coin2))
+            {
+                var thisX = this.exchanges[i];
+                var tempX = new Exchange(thisX.name, thisX.link.parent, thisX.bid, thisX.ask);
+                return tempX;
+            }
+        }
+        return false;        
     }
     this.getExchangeFromName = function(name) {
         for (var i = 0; i < this.exchanges.length; i++) {
@@ -320,6 +366,12 @@ function SupportedExchanges(supportedExchangesArray) {
                 return this.exchanges[i];
         }
     }
+    this.exchangeCoinForCoin = function (value, startCoin, goalCoin)
+    {
+        var x = this.getExchangeObjectWithTwoCoins(startCoin, goalCoin);
+        // console.log(x, startCoin, goalCoin);
+        return x.exchangeCurrency(startCoin, value)[1];
+    }    
 }
 
 
