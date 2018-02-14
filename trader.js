@@ -115,7 +115,7 @@ function GDAXTriangularArbitrager(gdaxAuthedClient) {
             }
             this.accountCoin = maxCoin;
             this.accountValue = maxVal;
-            // this.accountCoin = "BTC";
+            // this.accountCoin = "LTC";
             // this.accountValue = 0.002;
             this.endCoin = "USD";
             // this.accountValueInTermsOfEndCoin can't be set yet. Wait until supportedExchanges is complete
@@ -125,6 +125,73 @@ function GDAXTriangularArbitrager(gdaxAuthedClient) {
         }
     );    
 }
+
+
+
+
+
+// ******************************************************************************** //
+// ******************************************************************************** //
+// Websocket stuff
+if(false)
+{
+    const websocket = new Gdax.WebsocketClient(
+      ['BTC-USD'],
+      licenses.sandbox_ws_feed,
+      {
+        key: licenses.sandbox_key,
+        secret: licenses.sandbox_secret,
+        passphrase: licenses.sandbox_passphrase,
+      },
+      { channels: ['full'] }
+    );
+
+
+    // websocket.unsubscribe({ channels: ['heartbeat'] });
+    // const websocket = new Gdax.WebsocketClient(['BTC-USD', 'ETH-USD']);
+
+    websocket.on('message', data => {
+        if(data.type != "heartbeat")
+            console.log("message received ", data);
+    });
+    websocket.on('error', err => {
+        console.log("error received");
+    });
+    websocket.on('close', () => {
+        console.log("close received");
+    });
+
+    userInput = false;
+
+    query = function(callback) {
+        process.stdin.resume();
+        process.stdout.write("Please enter some input: ");
+        process.stdin.once("data", function(data) {
+            callback(data.toString().trim());
+        });
+    };
+
+    query(function(response) {
+        console.log("you wrote ", response);
+        process.stdin.pause();
+    });
+
+    intervalFunc = function() {
+        console.log("blah blah blah");
+    }
+
+    setInterval(intervalFunc, 1000);
+}
+
+
+
+
+
+
+
+// ******************************************************************************** //
+// ******************************************************************************** //
+// Classes for the Arbitrager
 
 function PathFinder(startCoin, endCoin) {
     this.startCoin = startCoin;
@@ -241,6 +308,18 @@ function Exchange(name, parentLink = 0, bid = 0, ask = 0) {
         this.quoteMinIncrement = 0.01;    
         break;
     }
+    switch(this.baseCoin) 
+    {
+    case "BTC":
+    case "BCH":
+        this.takerFee = 0.0025;
+        break;
+    case "ETH":
+    case "LTC":
+    default:
+        this.takerFee = 0.0030;
+        break;
+    }    
     // Link data to facilitate create paths later
     this.link = new PathLinks(parentLink);
     this.getPairedCoin = function (currentCoin)
@@ -300,7 +379,7 @@ function Exchange(name, parentLink = 0, bid = 0, ask = 0) {
             var rate = this.bid;
             // console.log(exchangeName, ": buying ", newValue / rate, " ", this.baseCoin, " with ", newValue, currency, " at a rate of " , rate, ". (Ask rate is ", this.ask, ").");        
             // console.log("... lost dust = ", value - newValue);        
-            return [this.baseCoin, newValue / rate];
+            return [this.baseCoin, (newValue / rate)];// * (1 - this.takerFee) ];
         } else //currency == this.baseCoin
         {
             var rate = this.ask;
@@ -310,7 +389,7 @@ function Exchange(name, parentLink = 0, bid = 0, ask = 0) {
             value = truncatedOtherValue / rate;
             // console.log(exchangeName, ": selling ",  value, currency, " for ", truncatedOtherValue, " ", this.quoteCoin, " at a rate of ", rate, ". (buy rate is ", this.bid, ")."); 
             // console.log("... lost dust = ", otherValue - truncatedOtherValue);
-            return [this.quoteCoin, truncatedOtherValue];        
+            return [this.quoteCoin, truncatedOtherValue];// * (1 - this.takerFee)];        
         }
     };
 }
@@ -379,6 +458,11 @@ function SupportedExchanges(supportedExchangesArray) {
 function floorPrecision(value, precision)
 {
     return Math.floor(value / precision) * precision;
+}
+
+function roundPrecision(value, precision)
+{
+    return Math.round(value / precision) * precision;
 }
 
 function getFirstCoinOfExchange(exchange)
